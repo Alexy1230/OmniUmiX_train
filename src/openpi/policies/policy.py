@@ -93,6 +93,11 @@ class Policy(BasePolicy):
             "state": inputs["state"],
             "actions": self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
         }
+        # Some policy-specific output transforms need an inference-only
+        # reference that must not be exposed to the model as proprioceptive
+        # state. Preserve it through model sampling when provided.
+        if "current_tcp_pose9_gripper" in inputs:
+            outputs["current_tcp_pose9_gripper"] = inputs["current_tcp_pose9_gripper"]
         model_time = time.monotonic() - start_time
         if self._is_pytorch_model:
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)

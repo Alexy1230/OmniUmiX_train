@@ -20,6 +20,9 @@ import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
+import openpi.policies.umi_bimanual_policy as umi_bimanual_policy
+import openpi.policies.umi_policy as umi_policy
+import openpi.policies.umi_proprio_policy as umi_proprio_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
@@ -28,6 +31,8 @@ import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
+import openpi.transforms_umi as _transforms_umi
+import openpi.transforms_umi_bimanual as _transforms_umi_bimanual
 
 ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
@@ -81,6 +86,11 @@ class DataConfig:
     model_transforms: _transforms.Group = dataclasses.field(default_factory=_transforms.Group)
     # If true, will use quantile normalization. Otherwise, normal z-score normalization will be used.
     use_quantile_norm: bool = False
+    # Selects a dataset-specific normalization implementation.
+    normalization_mode: Literal["default", "umi_action10", "umi_action20", "umi_proprio"] = "default"
+
+    # Optional single-arm proprioception/image history stride in dataset frames.
+    umi_history_steps: int | None = None
 
     # Names of keys that will be used by the data loader to generate the action sequence. The length of the
     # sequence is defined by the `action_horizon` field in the model config. This should be adjusted if your
@@ -275,6 +285,110 @@ class LeRobotAlohaDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             action_sequence_keys=self.action_sequence_keys,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUMIDataConfig(DataConfigFactory):
+    """Config for one UMI LeRobot dataset.
+
+    UMI's raw 10-D observation state is intentionally not repacked into the
+    model state. Relative actions are computed from the first action in the
+    action chunk, and deployment converts them back to absolute poses using a
+    separate current TCP reference.
+    """
+
+    action_sequence_keys: Sequence[str] = ("action",)
+    # If provided, this prompt is injected when the LeRobot task prompt is not used.
+    default_prompt: str | None = None
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        model_transforms = ModelTransformFactory(default_prompt=self.default_prompt)(model_config)
+        data_transforms = _transforms.Group(
+            inputs=[
+                umi_policy.UmiInputs(model_type=model_config.model_type),
+                _transforms_umi.RelativeTcpPose9ColumnFromFirstAction(),
+            ],
+            outputs=[
+                _transforms_umi.AbsoluteTcpPose9ColumnFromFirstAction(),
+                umi_policy.UmiOutputs(),
+            ],
+        )
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=_transforms.Group(inputs=[umi_policy.UmiRepack()]),
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=self.action_sequence_keys,
+            use_quantile_norm=False,
+            normalization_mode="umi_action10",
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUMIProprioDataConfig(LeRobotUMIDataConfig):
+    """Single-arm measured history; actions relative to the latest observation."""
+
+    history_steps: int = 3
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        if model_config.model_type != _model.ModelType.PI05 or not model_config.discrete_state_input:
+            raise ValueError("UMI proprioception requires pi0.5 discrete_state_input=True")
+        if model_config.action_dim < 32 or model_config.action_horizon != 32:
+            raise ValueError("Expected action_dim>=32 and action_horizon=32")
+        base = super().create(assets_dirs, model_config)
+        return dataclasses.replace(
+            base,
+            umi_history_steps=self.history_steps,
+            normalization_mode="umi_proprio",
+            repack_transforms=_transforms.Group(inputs=[umi_proprio_policy.UmiProprioRepack()]),
+            data_transforms=_transforms.Group(
+                inputs=[umi_proprio_policy.UmiProprioInputs(model_config.model_type)],
+                outputs=[_transforms_umi.AbsoluteTcpPose9ColumnFromFirstAction(), umi_policy.UmiOutputs()],
+            ),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotUMIBimanualDataConfig(DataConfigFactory):
+    """Two wrist images and right-first 20-D actions; no model proprioception."""
+
+    action_sequence_keys: Sequence[str] = ("action",)
+    default_prompt: str | None = None
+    right_image_key: str = "observation.images.fisheye_img_right"
+    left_image_key: str = "observation.images.fisheye_img_left"
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        if model_config.action_horizon != 32 or model_config.action_dim < 20:
+            raise ValueError("Bimanual UMI requires action_horizon=32 and action_dim>=20.")
+        data_transforms = _transforms.Group(
+            inputs=[
+                umi_bimanual_policy.UmiBimanualInputs(model_type=model_config.model_type),
+                _transforms_umi_bimanual.RelativeBimanualTcpPose9ColumnFromFirstAction(),
+            ],
+            outputs=[
+                _transforms_umi_bimanual.AbsoluteBimanualTcpPose9ColumnFromFirstAction(),
+                umi_bimanual_policy.UmiBimanualOutputs(),
+            ],
+        )
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    umi_bimanual_policy.UmiBimanualRepack(
+                        right_image_key=self.right_image_key,
+                        left_image_key=self.left_image_key,
+                    ),
+                ],
+            ),
+            data_transforms=data_transforms,
+            model_transforms=ModelTransformFactory(default_prompt=self.default_prompt)(model_config),
+            action_sequence_keys=self.action_sequence_keys,
+            use_quantile_norm=False,
+            normalization_mode="umi_action20",
         )
 
 
@@ -557,7 +671,311 @@ class TrainConfig:
 
 
 # Use `get_config` if you need to get a config by name in your code.
+def _make_umi_train_config(
+    *,
+    name: str,
+    repo_id: str,
+    asset_id: str,
+    smoke: bool = False,
+    proprioception: bool = False,
+    num_workers: int = 2,
+    num_train_steps: int = 20_000,
+    default_prompt: str | None = None,
+) -> TrainConfig:
+    """Create one independent UMI training configuration."""
+
+    model = pi0_config.Pi0Config(
+        pi05=True,
+        action_dim=32,
+        action_horizon=32,
+        discrete_state_input=proprioception,
+        paligemma_variant="gemma_2b_lora",
+        action_expert_variant="gemma_300m_lora",
+    )
+    data_factory = LeRobotUMIProprioDataConfig if proprioception else LeRobotUMIDataConfig
+    return TrainConfig(
+        name=name,
+        model=model,
+        data=data_factory(
+            repo_id=repo_id,
+            assets=AssetsConfig(asset_id=asset_id),
+            base_config=DataConfig(prompt_from_task=default_prompt is None),
+            default_prompt=default_prompt,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # JAX uses all visible devices for the default data sharding. Keep the
+        # smoke batch divisible by the local device count (currently 8).
+        batch_size=8 if smoke else 32,
+        num_workers=0 if smoke else num_workers,
+        num_train_steps=2 if smoke else num_train_steps,
+        log_interval=1 if smoke else 100,
+        save_interval=2 if smoke else 1_000,
+        keep_period=None if smoke else 5_000,
+        overwrite=smoke,
+        wandb_enabled=not smoke,
+        freeze_filter=model.get_freeze_filter(),
+        ema_decay=None,
+        policy_metadata={
+            "action_type": "tcp_pose9_gripper",
+            "is_relative": False,
+            "action_horizon": 32,
+            "fps": 30,
+            **(
+                {
+                    "proprioception": True,
+                    "state_dim": 32,
+                    "history_steps": 3,
+                    "history_key": "tcp_pose9_gripper_history",
+                    "image_history_horizon": 2,
+                    "previous_image_key": "observation/image_previous",
+                    "current_image_key": "observation/image",
+                    "episode_start_key": "episode_start_tcp_pose9_gripper",
+                }
+                if proprioception else {}
+            ),
+        },
+    )
+
+
+def _make_umi_bimanual_train_config(
+    *,
+    name: str,
+    repo_id: str,
+    asset_id: str,
+    num_workers: int = 2,
+    num_train_steps: int = 20_000,
+    default_prompt: str | None = None,
+) -> TrainConfig:
+    """UMI Pi0.5 LoRA settings with a two-camera, two-arm data adapter."""
+    config = _make_umi_train_config(
+        name=name, repo_id=repo_id, asset_id=asset_id, default_prompt=default_prompt, num_train_steps=num_train_steps, num_workers=num_workers,
+    )
+    return dataclasses.replace(
+        config,
+        data=LeRobotUMIBimanualDataConfig(
+            repo_id=repo_id,
+            assets=AssetsConfig(asset_id=asset_id),
+            base_config=DataConfig(prompt_from_task=default_prompt is None),
+            default_prompt=default_prompt,
+        ),
+        policy_metadata={
+            **config.policy_metadata,
+            "action_type": "bimanual_tcp_pose9_gripper",
+            "num_robots": 2,
+            "arm_order": ["right", "left"],
+            "image_keys": ["observation/image_right", "observation/image_left"],
+            "reference_key": "current_tcp_pose9_gripper",
+            "action_dim": 20,
+        },
+    )
+
+
+def _umi_assets_dir(config_name: str) -> str:
+    return str(pathlib.Path(__file__).resolve().parents[3] / "assets" / config_name)
+
+
+def _make_umi_paligemma_flow_config(
+    *,
+    name: str,
+    repo_id: str,
+    asset_id: str,
+    source_config_name: str,
+    default_prompt: str | None = None,
+    num_train_steps: int = 100_000,
+) -> TrainConfig:
+    """UMI Pi0.5 flow training without the Pi0.5 base checkpoint.
+
+    This keeps the PaliGemma vision-language initialization, randomly
+    initializes the Action Expert and flow heads, and trains all parameters.
+    """
+
+    model = pi0_config.Pi0Config(
+        pi05=True,
+        action_dim=32,
+        action_horizon=32,
+        discrete_state_input=False,
+        paligemma_variant="gemma_2b",
+        action_expert_variant="gemma_300m",
+    )
+    return TrainConfig(
+        name=name,
+        model=model,
+        data=LeRobotUMIDataConfig(
+            repo_id=repo_id,
+            assets=AssetsConfig(
+                assets_dir=_umi_assets_dir(source_config_name),
+                asset_id=asset_id,
+            ),
+            base_config=DataConfig(prompt_from_task=default_prompt is None),
+            default_prompt=default_prompt,
+        ),
+        weight_loader=weight_loaders.PaliGemmaWeightLoader(),
+        batch_size=8,
+        num_workers=2,
+        num_train_steps=num_train_steps,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=2.5e-5,
+            decay_steps=num_train_steps,
+            decay_lr=2.5e-6,
+        ),
+        log_interval=100,
+        save_interval=1_000,
+        keep_period=5_000,
+        freeze_filter=nnx.Nothing(),
+        ema_decay=None,
+        fsdp_devices=8,
+        policy_metadata={
+            "action_type": "tcp_pose9_gripper",
+            "is_relative": False,
+            "action_horizon": 32,
+            "fps": 30,
+        },
+    )
+
+
 _CONFIGS = [
+    _make_umi_train_config(
+        name="lxy_pi05_umi_red_cup_yellow_plate_observed_distance_final",
+        repo_id="/share/project/lxy/test_20261003_155718_openpi_final",
+        asset_id="lxy_umi_red_cup_yellow_plate_observed_distance_final",
+        num_train_steps=20_000,
+    ),
+    _make_umi_train_config(
+        name="lxy_pi05_umi_red_cup_yellow_plate_observed_distance_smooth_1mm",
+        repo_id="/share/project/lxy/test_20261003_155718_openpi_smooth_1mm",
+        asset_id="lxy_umi_red_cup_yellow_plate_observed_distance_smooth_1mm",
+        num_train_steps=20_000,
+    ),
+    
+    _make_umi_bimanual_train_config(
+        name="infra_test_pi05_biumi_pick_place_cup_rod",
+        repo_id="/share/project/lxy/Data/omniumi_infra_test/pick_and_place_with_two_hands_cup_rod_20261014_170154_openpi",
+        asset_id="infra_test_bimanial_pick_cup_rod_1015",
+        default_prompt="Pick up the red cup with the left arm, place the rod into the cup with the right arm, then place the red cup onto the yellow plate with the left arm.",
+        num_train_steps=30_000,
+        num_workers=4,
+    ),
+    _make_umi_bimanual_train_config(
+        name="infra_test_pi05_biumi_pick_place_cup_rod_1019",
+        repo_id="/share/project/lxy/Data/omniumi_infra_test/pick_and_place_with_two_hands_cup_rod_20261019_merged_openpi",
+        asset_id="infra_test_bimanial_pick_cup_rod_1019",
+        default_prompt="Pick up the red cup with the left arm and place it on the yellow plate. Then, pick up the white rod with the right arm and place it inside the red cup.",
+        num_train_steps=40_000,
+        num_workers=8,
+    ),
+    _make_umi_bimanual_train_config(
+        name="pi05_biumi_automate_296_assemble_20261027",
+        repo_id="/share/project/lxy/Data/openpi_with_tactile/assemble_20261027_merged_openpi",
+        asset_id="biumi_automate_296_assemble_20261027",
+        default_prompt="Pick up the white component, align it with the light pink base, and insert it into the base.",
+        num_train_steps=40_000,
+        num_workers=8,
+    ),
+
+    _make_umi_train_config(
+        name="infra_test_pi05_biumi_pick_place_cup_rod_right_alone",
+        repo_id="/share/project/lxy/Data/omniumi_infra_test/pick_and_place_with_two_hands_cup_rod_20261014_170154_right_alone_openpi",
+        asset_id="infra_test_pick_place_cup_1013_right_alone",
+        default_prompt="Pick up the white rod and place it into the red cup held by the left arm.",
+    ),
+    _make_umi_train_config(
+        name="infra_test_pi05_biumi_pick_place_cup_rod_left_alone",
+        repo_id="/share/project/lxy/Data/omniumi_infra_test/pick_and_place_with_two_hands_cup_rod_20261014_170154_left_alone_openpi",
+        asset_id="infra_test_pick_place_cup_1013_left_alone",
+        default_prompt="Pick up the red cup, wait for the white rod to be placed inside, then place the cup onto the yellow plate.",
+    ),
+    _make_umi_train_config(
+        name="pi05_umi_adjust_tube_20261023",
+        repo_id="/share/project/lxy/Data/openpi_with_tactile/adjust_tube_20261023_1655_merged_openpi",
+        asset_id="umi_adjust_tube_20261023",
+        default_prompt="Pick up the clear plastic tube from the plate, reorient it upright using the edge of the tube rack, then align it with an empty hole and insert it into the rack.",
+        num_train_steps=40_000,
+        num_workers=4,
+    ),
+    _make_umi_train_config(
+        name="pi05_umi_adjust_tube_20261025_modified",
+        repo_id="/share/project/lxy/Data/openpi_with_tactile/adjust_tube_20261025_merged_openpi",
+        asset_id="umi_adjust_tube_20261025",
+        default_prompt="Pick up the clear plastic tube from the plate, reorient it upright using the edge of the tube rack, then align it with an empty hole and insert it into the rack.",
+        num_train_steps=40_000,
+        num_workers=4,
+    ),
+    _make_umi_train_config(
+        name="pi05_umi_insert_usb_20261026",
+        repo_id="/share/project/lxy/Data/openpi_with_tactile/insert_usb_20261026_133824_openpi",
+        asset_id="umi_insert_usb_20261026",
+        default_prompt="Align the USB plug with the USB port and fully insert it into the port.",
+        num_train_steps=40_000,
+        num_workers=4,
+    ),
+    _make_umi_train_config(
+        name="pi05_umi_automate_296_assemble_20261027",
+        repo_id="/share/project/lxy/Data/openpi_with_tactile/assemble_20261027_right_merged_openpi",
+        asset_id="umi_automate_296_assemble_20261027",
+        default_prompt="Pick up the white component, align it with the light pink base, and insert it into the base.",
+        num_train_steps=30_000,
+        num_workers=4,
+    ),
+    _make_umi_train_config(
+        name="pi05_umi_adjust_tube_20261028_printed",
+        repo_id="/share/project/lxy/Data/openpi_with_tactile/adjust_tube_20261028_merged_cleaned_openpi_without_tac",
+        asset_id="umi_adjust_tube_20261028",
+        default_prompt="Pick up the clear plastic tube, align it with an empty hole in the tube rack, and insert it.",
+        num_train_steps=40_000,
+        num_workers=4,
+    ),
+    _make_umi_train_config(
+        name="pi05_umi_adjust_tube_20261028_printed_noprocess",
+        repo_id="/share/project/lxy/Data/openpi_with_tactile/adjust_tube_20261028_merged_cleaned_width_without_tac_openpi_woprocess",
+        asset_id="umi_adjust_tube_20261028_noprocess",
+        default_prompt="Pick up the clear plastic tube, align it with an empty hole in the tube rack, and insert it.",
+        num_train_steps=40_000,
+        num_workers=4,
+    ),
+    # Paired historical images and proprioception; existing experiments stay visual-only.
+    _make_umi_train_config(
+        name="pi05_umi_adjust_tube_20261028_printed_noprocess_proprio",
+        repo_id="/share/project/lxy/Data/openpi_with_tactile/adjust_tube_20261028_merged_cleaned_width_without_tac_openpi_woprocess",
+        asset_id="umi_adjust_tube_20261028_noprocess_proprio",
+        proprioception=True,
+        default_prompt="Pick up the clear plastic tube, align it with an empty hole in the tube rack, and insert it.",
+        num_train_steps=40_000,
+        num_workers=16,
+    ),
+
+
+    _make_umi_train_config(
+        name="pi05_umi_dual_cup_hold",
+        repo_id="/share/project/liyuanyuan/data/OmniWAM_Data/DualCupHold_260819_30Hz_fastwam_lerobot_v21_pose9_gripper_fisheye240_fps30",
+        asset_id="umi_dual_cup_hold",
+        default_prompt="drop the inner cup, hold the outer cup",
+    ),
+    _make_umi_train_config(
+        name="infra_test_pi05_umi_pick_place_cup",
+        repo_id="/share/project/lxy/Data/omniumi_infra_test/pick_and_place_bottle_with_width_openpi_20261013",
+        asset_id="infra_test_pick_place_cup_1013",
+        default_prompt="Pick up the red cup and place it on the yellow plate",
+    ),
+    _make_umi_train_config(
+        name="infra_test_pi05_umi_pick_place_cup_minimal",
+        repo_id="/share/project/lxy/Data/omniumi_infra_test/pick_and_place_bottle_with_width_openpi_minimal_20261013",
+        asset_id="infra_test_pick_place_cup_1013_minimal",
+        default_prompt="Pick up the red cup and place it on the yellow plate",
+    ),
+    _make_umi_paligemma_flow_config(
+        name="pi05_umi_dual_cup_hold_paligemma_flow",
+        repo_id="/share/project/liyuanyuan/data/OmniWAM_Data/DualCupHold_260819_30Hz_fastwam_lerobot_v21_pose9_gripper_fisheye240_fps30",
+        asset_id="umi_dual_cup_hold",
+        source_config_name="pi05_umi_dual_cup_hold",
+        default_prompt="drop the inner cup, hold the outer cup",
+    ),
+    _make_umi_paligemma_flow_config(
+        name="pi05_umi_adjust_slip_tube_paligemma_flow",
+        repo_id="/share/project/liyuanyuan/data/OmniWAM_Data/AdjustSlipTube_Thick_Thin_260820_30hz_fastwam_lerobot_v21_pose9_gripper_fisheye240_fps30",
+        asset_id="umi_adjust_slip_tube",
+        source_config_name="pi05_umi_adjust_slip_tube",
+    ),
     #
     # Inference Aloha configs.
     #

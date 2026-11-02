@@ -104,11 +104,22 @@ def main(config_name: str, max_frames: int | None = None):
 
     for batch in tqdm.tqdm(data_loader, total=num_batches, desc="Computing stats"):
         for key in keys:
-            stats[key].update(np.asarray(batch[key]))
+            if key not in batch:
+                continue
+            value = np.asarray(batch[key])
+            if value.ndim == 0 or value.shape[-1] == 0:
+                continue
+            stats[key].update(value)
 
-    norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
+    norm_stats = {}
+    for key, stat in stats.items():
+        try:
+            norm_stats[key] = stat.get_statistics()
+        except ValueError:
+            # Empty semantic state is expected for the current UMI setup.
+            continue
 
-    output_path = config.assets_dirs / data_config.repo_id
+    output_path = config.assets_dirs / (data_config.asset_id or data_config.repo_id)
     print(f"Writing stats to: {output_path}")
     normalize.save(output_path, norm_stats)
 

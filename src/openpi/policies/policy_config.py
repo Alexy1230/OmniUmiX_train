@@ -7,10 +7,13 @@ import jax.numpy as jnp
 
 import openpi.models.model as _model
 import openpi.policies.policy as _policy
+import openpi.policies.umi_proprio_policy as umi_proprio_policy
 import openpi.shared.download as download
 from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
 import openpi.transforms as transforms
+import openpi.transforms_umi as transforms_umi
+import openpi.transforms_umi_bimanual as transforms_umi_bimanual
 
 
 def create_trained_policy(
@@ -72,18 +75,33 @@ def create_trained_policy(
         except ImportError:
             pytorch_device = "cpu"
 
+    if data_config.normalization_mode == "umi_proprio":
+        normalize = umi_proprio_policy.UmiProprioNormalize(norm_stats)
+        unnormalize = transforms_umi.UMIAction10Unnormalize(norm_stats)
+    elif data_config.normalization_mode == "umi_action10":
+        normalize = transforms_umi.UMIAction10Normalize(norm_stats)
+        unnormalize = transforms_umi.UMIAction10Unnormalize(norm_stats)
+    elif data_config.normalization_mode == "umi_action20":
+        normalize = transforms_umi_bimanual.UMIAction20Normalize(norm_stats)
+        unnormalize = transforms_umi_bimanual.UMIAction20Unnormalize(norm_stats)
+    elif data_config.normalization_mode == "default":
+        normalize = transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm)
+        unnormalize = transforms.Unnormalize(norm_stats, use_quantiles=data_config.use_quantile_norm)
+    else:
+        raise ValueError(f"Unsupported normalization mode: {data_config.normalization_mode}")
+
     return _policy.Policy(
         model,
         transforms=[
             *repack_transforms.inputs,
             transforms.InjectDefaultPrompt(default_prompt),
             *data_config.data_transforms.inputs,
-            transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+            normalize,
             *data_config.model_transforms.inputs,
         ],
         output_transforms=[
             *data_config.model_transforms.outputs,
-            transforms.Unnormalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+            unnormalize,
             *data_config.data_transforms.outputs,
             *repack_transforms.outputs,
         ],

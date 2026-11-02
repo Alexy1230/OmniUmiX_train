@@ -3,6 +3,14 @@ assets/
 checkpoints/
 data/
 wandb/
+.venv/
+.openpi_cache/
+.github/
+.pytest_cache/
+.ruff_cache/
+.vscode/
+outputs/
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

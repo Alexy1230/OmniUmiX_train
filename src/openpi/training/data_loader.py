@@ -12,9 +12,12 @@ import numpy as np
 import torch
 
 import openpi.models.model as _model
+import openpi.policies.umi_proprio_policy as umi_proprio_policy
 import openpi.training.config as _config
 from openpi.training.droid_rlds_dataset import DroidRldsDataset
 import openpi.transforms as _transforms
+import openpi.transforms_umi as _transforms_umi
+import openpi.transforms_umi_bimanual as _transforms_umi_bimanual
 
 T_co = TypeVar("T_co", covariant=True)
 
@@ -140,10 +143,23 @@ def create_torch_dataset(
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
     dataset = lerobot_dataset.LeRobotDataset(
         data_config.repo_id,
+        # chunk format
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },
+        # Some UMI videos have codec timestamps a fraction of a millisecond
+        # away from the parquet timestamps. A half-frame tolerance is still
+        # strict enough to catch real synchronization errors while allowing
+        # these valid 30 Hz samples to load.
+        tolerance_s=(
+            0.5 / dataset_meta.fps
+            if data_config.normalization_mode in ("umi_action10", "umi_action20", "umi_proprio")
+            else 1e-4
+        ),
     )
+
+    if data_config.umi_history_steps is not None:
+        dataset = umi_proprio_policy.UmiHistoryDataset(dataset, data_config.umi_history_steps)
 
     if data_config.prompt_from_task:
         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
@@ -180,12 +196,13 @@ def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip
             )
         norm_stats = data_config.norm_stats
 
+    normalization = _make_normalization_transform(data_config, norm_stats)
     return TransformedDataset(
         dataset,
         [
             *data_config.repack_transforms.inputs,
             *data_config.data_transforms.inputs,
-            _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+            normalization,
             *data_config.model_transforms.inputs,
         ],
     )
@@ -208,16 +225,31 @@ def transform_iterable_dataset(
             )
         norm_stats = data_config.norm_stats
 
+    normalization = _make_normalization_transform(data_config, norm_stats)
     return IterableTransformedDataset(
         dataset,
         [
             *data_config.repack_transforms.inputs,
             *data_config.data_transforms.inputs,
-            _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+            normalization,
             *data_config.model_transforms.inputs,
         ],
         is_batched=is_batched,
     )
+
+
+def _make_normalization_transform(
+    data_config: _config.DataConfig, norm_stats: dict[str, _transforms.NormStats]
+) -> _transforms.DataTransformFn:
+    if data_config.normalization_mode == "umi_proprio":
+        return umi_proprio_policy.UmiProprioNormalize(norm_stats)
+    if data_config.normalization_mode == "umi_action10":
+        return _transforms_umi.UMIAction10Normalize(norm_stats)
+    if data_config.normalization_mode == "umi_action20":
+        return _transforms_umi_bimanual.UMIAction20Normalize(norm_stats)
+    if data_config.normalization_mode == "default":
+        return _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm)
+    raise ValueError(f"Unsupported normalization mode: {data_config.normalization_mode}")
 
 
 def create_data_loader(

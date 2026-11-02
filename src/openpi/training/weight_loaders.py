@@ -1,5 +1,7 @@
 import dataclasses
 import logging
+import os
+import pathlib
 import re
 from typing import Protocol, runtime_checkable
 
@@ -11,6 +13,16 @@ import openpi.shared.array_typing as at
 import openpi.shared.download as download
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_PALIGEMMA_PARAMS = "gs://vertex-model-garden-paligemma-us/paligemma/pt_224.npz"
+_PALIGEMMA_PARAMS_ENV = "OPENPI_PALIGEMMA_WEIGHTS"
+_PROJECT_CACHE_PALIGEMMA_PARAMS = (
+    pathlib.Path(__file__).resolve().parents[3]
+    / ".openpi_cache"
+    / "vertex-model-garden-paligemma-us"
+    / "paligemma"
+    / "pt_224.npz"
+)
 
 
 @runtime_checkable
@@ -62,13 +74,23 @@ class PaliGemmaWeightLoader(WeightLoader):
     This allows us to support the action expert which is used by the Pi0 model.
     """
 
+    params_path: str | None = None
+
     def load(self, params: at.Params) -> at.Params:
-        path = download.maybe_download(
-            "gs://vertex-model-garden-paligemma-us/paligemma/pt_224.npz", gs={"token": "anon"}
+        params_path = (
+            self.params_path
+            or os.getenv(_PALIGEMMA_PARAMS_ENV)
+            or (str(_PROJECT_CACHE_PALIGEMMA_PARAMS) if _PROJECT_CACHE_PALIGEMMA_PARAMS.exists() else None)
+            or _DEFAULT_PALIGEMMA_PARAMS
         )
+        download_kwargs = {"gs": {"token": "anon"}} if params_path == _DEFAULT_PALIGEMMA_PARAMS else {}
+        path = download.maybe_download(params_path, **download_kwargs)
         with path.open("rb") as f:
             flat_params = dict(np.load(f, allow_pickle=False))
-        loaded_params = {"PaliGemma": flax.traverse_util.unflatten_dict(flat_params, sep="/")["params"]}
+        paligemma_params = flax.traverse_util.unflatten_dict(flat_params, sep="/")
+        if "params" in paligemma_params:
+            paligemma_params = paligemma_params["params"]
+        loaded_params = {"PaliGemma": paligemma_params}
         # Add all missing weights.
         return _merge_params(loaded_params, params, missing_regex=".*")
 
