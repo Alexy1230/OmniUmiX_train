@@ -140,6 +140,19 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.9
 .venv/bin/python scripts/train.py pi05_umi_bimanual --exp-name bimanual_run --wandb-enabled
 ```
 
+server:
+```bash
+.venv/bin/python scripts/serve_policy.py --port=8099 policy:checkpoint --policy.config=pi05_umi_adjust_tube_20261028_printed_noprocess_proprio --policy.dir=/home/legion/LXY/openpi/openpi/checkpoints/adjust_tube_noprocess_propri/39999
+```
+
+nuc:
+```bash
+(polymetis-local) admin1@admin1-NUC10i5FNH:~/fairo/polymetis/polymetis$ python python/scripts/launch_robot.py robot_client=franka_hardware_fr3 robot_model=franka_fr3 robot_client.executable_cfg.robot_ip=172.16.0.3
+
+(polymetis-local) admin1@admin1-NUC10i5FNH:~/Downloads/universal_manipulation_interface/scripts_real$ python launch_franka_interface_server.py --no-gripper --bind-port 4243
+```
+
+
 Compute stats after editing the dataset/image mapping. This writes
 `assets/pi05_umi_bimanual/umi_bimanual/norm_stats.json`. Only dimensions
 0,1,2,9,10,11,12,19 are normalized using q01/q99; rotations remain unchanged.
@@ -159,7 +172,6 @@ python scripts/serve_policy.py --port 8099 policy:checkpoint \
 export OPENPI_DATA_HOME=/share/project/lxy/openpi/.openpi_cache
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.75
 .venv/bin/python scripts/serve_policy.py --port=8099 policy:checkpoint --policy.config=pi05_umi_adjust_tube_20261022 --policy.dir=/share/project/lxy/openpi/checkpoints/pi05_umi_adjust_tube_20261022/adjust_tube/39999
-
 ```
 
 No new server script is needed. It loads this data adapter and the checkpoint's

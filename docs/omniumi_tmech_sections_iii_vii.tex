@@ -1,0 +1,540 @@
+% OmniUMI T-Mech 正文草稿：第 III--VII 章。
+% 将本文件接在 Introduction 和 Related Work 之后；本文件不是独立编译入口。
+% 所需宏包：amsmath、amssymb、booktabs。中文均为注释，不需要中文排版宏包。
+% 引用键 diffusion_policy、acp、umift 沿用前文示意命名；modern_robotics 为新增示意键。
+% 依据：用户提供的 2604.10647v3.pdf。实验数值仅使用该版本已经报告的结果。
+% TODO 标记表示投稿前需要核实的实现细节或补充的实验；不得将其视为已经完成的工作。
+
+% III. 系统设计与多模态感知
+\section{System Design and Multimodal Sensing}
+\label{sec:system}
+
+% A. 整体系统架构
+\subsection{System Architecture}
+
+% OmniUMI 将手持示范采集、电动夹持和多模态感知集成到一个可复用的操作接口中。
+OmniUMI integrates handheld demonstration acquisition, motorized grasping, and multimodal sensing into a reusable manipulation interface.
+% 系统获取场景 RGB-D 观测、末端运动、局部触觉、夹持力估计和外部交互力旋量。
+The system acquires scene-level RGB-D observations, end-effector motion, local tactile signals, grasp-force estimates, and external interaction wrench.
+% 定制集线模块统一管理异构设备的通信、协议转换、供电和连接，减少独立接口和分散接线。
+A custom hub manages communication, protocol conversion, power distribution, and connectivity for heterogeneous devices, reducing separate interfaces and fragmented wiring.
+% 这些模块共同提供运动几何、夹持载荷和环境接触信息，供示范记录和下游学习使用。
+Together, these modules provide motion geometry, grasp loading, and environmental-contact information for demonstration recording and downstream learning.
+% TODO：补充传感器和电机型号、尺寸、质量、通信接口、采样率、有效分辨率及同步误差。
+% TODO：在此插入系统结构图，明确集线模块、夹爪、双侧触觉、腕部力矩传感器和视觉模块的位置与连接。
+
+% B. 可复用夹爪与触觉集成
+\subsection{Reusable Gripper and Tactile Integration}
+
+% 同一电动快换夹爪用于手持采集和机器人部署，以减少两个阶段之间的硬件变化。
+The same motorized quick-swap gripper is used for handheld collection and robot deployment to reduce hardware changes between the two stages.
+% 复用夹爪有助于保持手指几何、触觉传感器安装位置和驱动机构的一致性。
+Reusing the gripper helps maintain consistent finger geometry, tactile-sensor placement, and actuation mechanics.
+% 仿生手指结构将触觉感知集成到受保护的接触部位，并保留常规夹持所需的手指结构。
+The biomimetic finger structure integrates tactile sensing into protected contact regions while retaining the finger structure needed for conventional grasping.
+% 夹爪指令通过电信号传递，避免了对跨越力感知结构的机械扳机传动路径的依赖。
+Gripper commands are transmitted electrically, removing the need for a mechanical trigger linkage across the force-sensing structure.
+% TODO：补充快换重复定位误差、接触几何尺寸，以及空载开合对腕部力测量影响的实验。
+
+% C. 夹持力估计
+\subsection{Internal Grasp-Force Estimation}
+
+% 系统通过电机侧信息估计内部夹持力。
+Internal grasping force is estimated from motor-side information.
+% 设电机电流为 i_t、转矩常数为 k_tau、传动的有效半径为 r_g，采用以下近似关系。
+Let $i_t$ denote motor current, $k_{\tau}$ the torque constant, and $r_g$ the effective transmission radius. The approximation is
+\begin{equation}
+    \tau_t^g \approx k_{\tau} i_t,
+    \qquad
+    \widehat{F}_t^{\mathrm{int}}
+    \approx \frac{k_{\tau} i_t}{r_g}.
+    \label{eq:grasp_force_estimate}
+\end{equation}
+% 这一估计为夹持载荷提供紧凑表示，但会受到摩擦、传动效率和运动状态的影响。
+This estimate provides a compact representation of grasp loading, but is affected by friction, transmission efficiency, and motion state.
+% 本文将这一信号用作电机侧夹持载荷估计。
+The resulting signal is used as a motor-side estimate of grasp loading.
+% TODO：明确力的定义是单指法向力还是双指总夹持力，并核实电流符号、传动比和有效半径的标定。
+% TODO：补充独立参考力传感器下的误差、迟滞、重复性及不同开度条件的验证。
+
+% D. 外部力旋量补偿与坐标定义
+\subsection{External-Wrench Compensation and Coordinates}
+
+% 腕部力矩传感器用于记录工具与环境之间的交互。
+A wrist force/torque sensor records interaction between the tool and the environment.
+% 原始读数受到负载重力和姿态相关偏置的影响，因此先进行补偿，再变换到末端坐标系。
+Raw readings are affected by payload gravity and pose-dependent bias, and are compensated before being transformed into the end-effector frame.
+% 令 S 和 E 分别表示传感器坐标系与末端坐标系，并按照力在前、力矩在后的顺序排列六维力旋量。
+Let $S$ and $E$ denote the sensor and end-effector frames, respectively, with wrench ordered as force followed by moment.
+\begin{equation}
+    \mathbf{w}_t^{E}
+    = \mathcal{X}_{S\rightarrow E}
+    \left(\mathbf{w}_t^{S,\mathrm{raw}}
+    - \mathbf{w}_t^{S,\mathrm{grav}}\right),
+    \label{eq:wrench_compensation}
+\end{equation}
+% 其中，重力项包含标定模型中的静态偏置，X 是包含旋转及力臂效应的六维力旋量变换矩阵。
+Here, the gravity term includes the static offset in the calibrated model, and $\mathcal{X}_{S\rightarrow E}\in\mathbb{R}^{6\times6}$ is the wrench transformation accounting for rotation and moment-arm effects~\cite{modern_robotics}.
+% 当前策略动作使用三维笛卡尔力；传感器具有力矩通道并不意味着策略显式预测或控制力矩。
+The current policy action uses three-dimensional Cartesian force; the availability of moment channels does not imply explicit moment prediction or control.
+% TODO：补充负载参数辨识方法、坐标变换标定、原点定义及力的正负方向。
+
+% E. 数据组织与采集部署一致性
+\subsection{Data Organization and Deployment Consistency}
+
+% 每个示范片段由视觉、触觉、运动和力相关数据流组成，并保留时间对应关系。
+Each demonstration episode consists of visual, tactile, motion, and force-related streams with retained temporal correspondence.
+% 共享夹爪降低了感知配置差异，但机器人运动学、安装位姿和控制响应仍需单独处理。
+The shared gripper reduces differences in sensing configuration, while robot kinematics, mounting transforms, and control response still require separate treatment.
+% 本文通过明确的坐标和动作接口连接采集与部署。
+Collection and deployment are connected through explicit coordinate and action interfaces.
+% TODO：报告时间戳来源、对齐规则、重采样方法、允许时间偏差及缺失观测处理方法。
+
+% IV. 人机交互对齐的示范采集
+\section{Human-Aligned Demonstration Acquisition}
+\label{sec:human_aligned}
+
+% A. 操作定义
+\subsection{Operational Definition}
+
+% Human-align 在本文中指接口允许操作者感知并调节被记录的物理交互。
+Human alignment denotes the interface property that allows the operator to perceive and regulate the physical interaction being recorded.
+% 夹持反馈通过主从夹爪传递，环境接触则通过手持工具的机械交互被直接感知。
+Grasp feedback is conveyed through the master--slave gripper, while environmental contact is perceived through mechanical interaction with the handheld tool.
+% 触觉传感器同步记录这一反馈交互过程中的局部接触变化。
+Tactile sensors synchronously record local contact changes during this feedback-enabled interaction.
+% 这一设计将人的接触调节与系统记录联系起来，其效果通过示范信号和下游任务进行评估。
+This design connects human contact regulation to system recording, with its effects examined through demonstration signals and downstream tasks.
+
+% B. 双边夹持反馈
+\subsection{Bilateral Grasp Feedback}
+
+% 令主端和从端夹爪的电机位置分别为 theta_m 和 theta_s，从端采用比例微分跟踪。
+Let $\theta_m$ and $\theta_s$ denote the master and slave motor positions. The slave uses proportional--derivative tracking:
+\begin{equation}
+\begin{aligned}
+    \tau_s ={}& K_p\left(b\theta_m-\theta_s-\delta\right)\\
+              &+K_d\left(b\dot{\theta}_m-\dot{\theta}_s\right),
+    \label{eq:slave_tracking}
+\end{aligned}
+\end{equation}
+% 其中，b 是位置缩放系数，delta 是安装偏置，K_p 和 K_d 是跟踪增益。
+Here, $b$ is the position scale, $\delta$ is the installation offset, and $K_p$ and $K_d$ are tracking gains.
+% 主端将从端滤波后的测量转矩反馈给操作者。
+The master reflects the filtered measured slave torque to the operator:
+\begin{equation}
+    \tau_m=-\frac{1}{a}\widetilde{\tau}_s
+           +B_l\dot{\theta}_m,
+    \label{eq:master_feedback}
+\end{equation}
+% 其中，a 调节转矩反射比例，B_l 是主端局部速度补偿项。
+Here, $a$ adjusts the torque-reflection scale and $B_l$ is a local master-side velocity-compensation term.
+% 在该符号约定下，正的速度补偿用于抵消部分感知阻力，不能将其解释为附加阻尼。
+Under this sign convention, positive velocity compensation offsets part of the perceived resistance and must not be interpreted as additional damping.
+% 该闭环允许操作者根据接触阻力调节夹持参考，同时系统记录运动、转矩和触觉变化。
+This loop allows the operator to adjust the grasp reference in response to contact resistance while the system records motion, torque, and tactile changes.
+% TODO：补充增益、位置与转矩缩放、控制频率、通信延迟、转矩滤波和执行限幅。
+% TODO：核对正方向与电机极性；不能仅由上述公式宣称整个双边系统具有被动性或稳定性保证。
+
+% C. 手持环境交互
+\subsection{Handheld Environmental Interaction}
+
+% 擦拭等任务同时包含内部夹持和外部接触，操作者需要协调二者。
+Tasks such as wiping involve both internal grasping and external contact, which the operator must coordinate.
+% 手持结构保留工具接触、运动阻力和接触变化带来的机械反馈，腕部传感器定量记录对应交互。
+The handheld structure preserves mechanical feedback from tool contact, motion resistance, and contact changes, while the wrist sensor quantitatively records the interaction.
+% 内部夹持力与环境合外力具有不同物理含义，二者不被预设为一一对应。
+Internal grasping force and net environmental force have different physical meanings and are not assumed to have a one-to-one correspondence.
+% 触觉则补充局部形变与接触演化，使同一示范同时包含整体载荷和局部接触信息。
+Tactile sensing complements these measurements with local deformation and contact evolution, providing both overall loading and local contact information within a demonstration.
+
+% D. 示范信号的评估范围
+\subsection{Scope of Demonstration Evaluation}
+
+% 当前评估比较夹持力、擦拭法向接触力和触觉形变随时间的变化。
+The current evaluation compares the temporal evolution of grasping force, normal contact force during wiping, and tactile deformation.
+% 代表性示范对比检验这些信号与直接人类操作的对应关系，具体评估见第 VI 章。
+Representative demonstration comparisons examine their correspondence to direct human manipulation, as evaluated in Section~\ref{sec:experiments}.
+% TODO(T-Mech)：在同一套硬件上进行反馈开关对照，报告多操作者、多次示范和下游训练结果。
+
+% V. 多模态学习与阻抗兼容执行
+\section{Multimodal Learning and Impedance-Compatible Execution}
+\label{sec:learning_execution}
+
+% A. 多模态观测
+\subsection{Multimodal Observations}
+
+% 策略使用同步的视觉、触觉、运动和力相关观测。
+The policy uses synchronized visual, tactile, motion, and force-related observations.
+% 触觉图像首先由编码器映射为紧凑特征。
+Tactile images are first mapped to compact features by an encoder:
+\begin{equation}
+    \mathbf{z}_t^{\mathrm{tac}}
+    =\phi_{\mathrm{tac}}\left(\mathbf{I}_t^{\mathrm{tac}}\right).
+    \label{eq:tactile_features}
+\end{equation}
+% 多路触觉信号按照固定的传感器顺序组织，观测记为以下形式。
+Multiple tactile streams are organized in a fixed sensor order, and the observation is written as
+\begin{equation}
+\begin{aligned}
+    \mathbf{o}_t=\big(&\mathbf{I}_t^{\mathrm{rgb}},
+    \mathbf{I}_t^{\mathrm{depth}},\mathbf{z}_t^{\mathrm{tac}},\\
+    &\mathbf{s}_t,\widehat{F}_t^{\mathrm{int}},
+    \mathbf{f}_t^{\mathrm{ext}}\big),
+    \label{eq:policy_observation}
+\end{aligned}
+\end{equation}
+% 其中，s_t 包含实现中使用的运动学和夹爪状态，外部三维力来自补偿后的力旋量。
+Here, $\mathbf{s}_t$ contains the kinematic and gripper states used in the implementation, and the external force is extracted from the compensated wrench.
+% 视觉编码与低维观测编码共同形成条件 U-Net 的观测条件。
+Visual and low-dimensional observation encodings jointly form the observation condition for the conditional U-Net.
+% TODO：明确实际使用的状态分量、触觉编码器、特征维数、是否冻结编码器，以及左右触觉的融合方法。
+% TODO：报告各通道的归一化方法、训练集统计量、观测历史长度及缺失观测处理。
+% TODO(T-Mech)：若新增触觉--夹持力--腕部力的表示对齐方法，应在此给出独立模型和损失，并补齐对应消融；当前正文未声称已经实现该方法。
+
+% B. 策略动作与序列预测
+\subsection{Policy Actions and Chunk Prediction}
+
+% 策略动作包含末端平移、六维旋转表示、三维交互力和虚拟夹爪开度参考，共十三维。
+The policy action contains end-effector translation, a six-dimensional rotation representation, three-dimensional interaction force, and a virtual gripper-opening reference, yielding thirteen dimensions:
+\begin{equation}
+    \mathbf{a}_t=
+    \begin{bmatrix}
+        (\Delta\mathbf{p}_t^{\mathrm{ref}})^\top &
+        (\mathbf{r}_t^{6\mathrm{D}})^\top &
+        \mathbf{f}_t^\top & g_t^{\mathrm{ref}}
+    \end{bmatrix}^{\top}.
+    \label{eq:policy_action}
+\end{equation}
+% 使用 Diffusion Policy 的条件去噪框架，策略根据观测历史预测动作序列。
+Using the conditional denoising framework of Diffusion Policy~\cite{diffusion_policy}, the policy predicts action chunks from observation history.
+\begin{equation}
+    \mathbf{A}_t=\pi_{\theta}(\mathbf{O}_t),
+    \qquad
+    \mathbf{A}_t=(\mathbf{a}_t,\ldots,\mathbf{a}_{t+H-1}),
+    \label{eq:action_chunk}
+\end{equation}
+% 其中，O_t 表示截至当前时刻的观测历史，H 为预测时域。
+Here, $\mathbf{O}_t$ denotes observation history up to the current time and $H$ is the prediction horizon.
+% 条件 U-Net 结合观测条件和扩散步编码进行去噪，推理采用 DDIM 采样，并以滚动时域方式执行动作。
+The conditional U-Net combines observation conditioning with diffusion-step embeddings for denoising; inference uses DDIM sampling and receding-horizon execution.
+% TODO：补充预测平移的参考坐标系和相对值定义、动作标签的时间对应、旋转六维表示约定，以及力和开度标签的构造。
+% TODO：报告网络配置、去噪目标、扩散调度、DDIM 步数、H、执行时域、批量大小、优化器、学习率、训练步数及随机种子。
+
+% C. 运动与力的虚拟目标表示
+\subsection{Virtual Targets for Motion and Interaction}
+
+% 策略的几何输出按数据集坐标约定恢复为参考位姿。
+Geometric policy outputs are reconstructed as a reference pose according to the dataset coordinate convention.
+% 受顺应策略和虚拟目标方法启发，预测力被转换为参考位置调整量。
+Following compliance-policy and virtual-target formulations~\cite{acp,umift}, predicted force is compiled into a reference-position adjustment.
+% 采用正的对角平移刚度，并在当前设计中依据预测力幅值调节刚度。
+A positive diagonal translational stiffness is used and scheduled according to predicted force magnitude in the current design:
+\begin{equation}
+    \mathbf{K}_{p,t}
+    =\operatorname{diag}(k_{x,t},k_{y,t},k_{z,t}),
+    \qquad k_{i,t}>0.
+    \label{eq:translational_stiffness}
+\end{equation}
+% 当前调度在较大预测载荷下采用较低刚度，以提高接触顺应性。
+The current schedule uses lower stiffness under larger predicted loading to increase contact compliance.
+% 本文按照环境作用于工具的方向定义预测力，因此虚拟目标位置采用以下符号约定。
+Predicted force is defined using the environment-on-tool convention, giving the virtual target position
+\begin{equation}
+\begin{aligned}
+    \Delta\mathbf{p}_t^{\mathrm{force}}
+        &=\mathbf{K}_{p,t}^{-1}\mathbf{f}_t,\\
+    \mathbf{p}_t^{\mathrm{vt}}
+        &=\mathbf{p}_t^{\mathrm{ref}}
+          -\Delta\mathbf{p}_t^{\mathrm{force}}.
+    \label{eq:virtual_position}
+\end{aligned}
+\end{equation}
+% 该符号来自准静态力平衡：在参考位置附近，机器人弹性作用力与环境作用力相互平衡。
+The sign follows quasistatic force balance: near the reference position, the robot's elastic force balances the environmental force.
+% 虚拟目标姿态保留预测的参考朝向。
+The virtual target pose retains the predicted reference orientation:
+\begin{equation}
+    \mathbf{T}_t^{\mathrm{vt}}
+    =\begin{bmatrix}
+        \mathbf{R}_t^{\mathrm{ref}} & \mathbf{p}_t^{\mathrm{vt}}\\
+        \mathbf{0}^{\top} & 1
+    \end{bmatrix}.
+    \label{eq:virtual_pose}
+\end{equation}
+% TODO：核对传感器和动作标签的力正方向；若实际定义为工具作用于环境，式中的符号需要同步调整。
+% TODO：给出实际刚度调度函数、上下界、平滑方式、阻尼参数及虚拟位移限幅。
+
+% D. 关节空间阻抗执行
+\subsection{Joint-Space Impedance Execution}
+
+% 令 J_t 为机器人当前雅可比矩阵，构造笛卡尔刚度和阻尼矩阵。
+Let $\mathbf{J}_t$ be the current robot Jacobian. Cartesian stiffness and damping are constructed as
+\begin{equation}
+\begin{aligned}
+    \mathbf{K}_{x,t}
+        &=\operatorname{blkdiag}(\mathbf{K}_{p,t},\mathbf{K}_R),\\
+    \mathbf{D}_{x,t}
+        &=\operatorname{blkdiag}(\mathbf{D}_{p,t},\mathbf{D}_R).
+    \label{eq:cartesian_gains}
+\end{aligned}
+\end{equation}
+% 关节增益采用局部雅可比映射，并加入关节层的基础增益。
+Joint gains use a local Jacobian mapping with additional joint-level baseline gains:
+\begin{equation}
+\begin{aligned}
+    \mathbf{K}_{q,t}^{\mathrm{eff}}
+        &=\mathbf{J}_t^{\top}\mathbf{K}_{x,t}\mathbf{J}_t
+          +\mathbf{K}_{q,0},\\
+    \mathbf{D}_{q,t}^{\mathrm{eff}}
+        &=\mathbf{J}_t^{\top}\mathbf{D}_{x,t}\mathbf{J}_t
+          +\mathbf{D}_{q,0}.
+    \label{eq:joint_gains}
+\end{aligned}
+\end{equation}
+% 位姿误差与雅可比使用一致的坐标和速度旋量约定，阻尼最小二乘逆运动学生成关节参考。
+The pose error and Jacobian use a consistent frame and twist convention, and damped least-squares inverse kinematics generates the joint reference:
+\begin{equation}
+\begin{aligned}
+    \Delta\mathbf{q}_t
+        &=\mathbf{J}_t^{\top}
+        \left(\mathbf{J}_t\mathbf{J}_t^{\top}
+        +\lambda^2\mathbf{I}_6\right)^{-1}\boldsymbol{\xi}_t,\\
+    \mathbf{q}_{d,t}&=\mathbf{q}_t+\Delta\mathbf{q}_t,
+    \label{eq:damped_ik}
+\end{aligned}
+\end{equation}
+% 其中，xi_t 是当前位姿到虚拟目标的误差，lambda 是正的正则化参数。
+where $\boldsymbol{\xi}_t$ is the pose error to the virtual target and $\lambda$ is a positive regularization parameter.
+% 机器人执行关节阻抗控制，并补偿科里奥利、离心和重力项。
+The robot executes joint impedance control with Coriolis, centrifugal, and gravity compensation:
+\begin{equation}
+\begin{aligned}
+    \boldsymbol{\tau}_t={}&
+    \mathbf{K}_{q,t}^{\mathrm{eff}}
+        (\mathbf{q}_{d,t}-\mathbf{q}_t)\\
+    &+\mathbf{D}_{q,t}^{\mathrm{eff}}
+        (\dot{\mathbf{q}}_{d,t}-\dot{\mathbf{q}}_t)\\
+    &+\mathbf{c}(\mathbf{q}_t,\dot{\mathbf{q}}_t)
+        +\mathbf{g}(\mathbf{q}_t).
+    \label{eq:joint_impedance}
+\end{aligned}
+\end{equation}
+% 雅可比增益映射是局部近似，实际末端响应还受到机器人构型、逆运动学和底层动力学影响。
+The Jacobian gain mapping is a local approximation; the actual end-effector response also depends on robot configuration, inverse kinematics, and low-level dynamics.
+% TODO：补充机器人型号、控制接口、更新频率、基础增益、正则化参数、关节速度参考生成及命令插值方法。
+
+% E. 夹爪通道的执行语义
+\subsection{Gripper Execution}
+
+% 虚拟夹爪开度参考由位置跟踪实现。
+The virtual gripper-opening reference is realized through position tracking.
+% 接触阻止夹爪完全到达目标时，跟踪误差通过电机和传动机构产生夹持载荷。
+When contact prevents the gripper from reaching its target, tracking error generates grasp loading through the motor and transmission.
+% 动作中的夹爪分量命令位置，夹持载荷则由接触状态下的跟踪行为产生。
+The gripper action commands position, while grasp loading emerges from tracking behavior under contact.
+% 这一通道的效果依赖开度标定、接触几何和跟踪增益，需与夹持力观测的作用区分评估。
+Its effect depends on opening calibration, contact geometry, and tracking gains, and is evaluated separately from the role of grasp-force observations.
+
+% VI. 实验验证与讨论
+\section{Experimental Validation and Discussion}
+\label{sec:experiments}
+
+% A. 实验设置与评估问题
+\subsection{Experimental Setup and Evaluation Questions}
+
+% 实验围绕感知可靠性、示范特征和下游操作三个问题组织。
+The experiments address three questions concerning sensing reliability, demonstration characteristics, and downstream manipulation.
+% 具体评估补偿对姿态偏置的影响、不同示范接口记录的信号特征，以及交互输入对任务表现的作用。
+Specifically, we evaluate the effect of compensation on pose-dependent bias, the signal characteristics recorded through different demonstration interfaces, and the contribution of interaction inputs to task performance.
+
+% 下游策略使用 OmniUMI 采集的任务示范，并按照第 V 章的动作接口进行部署。
+Downstream policies use task demonstrations collected with OmniUMI and are deployed through the action interface in Section~\ref{sec:learning_execution}.
+% 当前报告比较包含或不包含特定交互输入的策略变体。
+The reported comparisons distinguish policy variants with and without selected interaction inputs.
+% TODO：补充机器人型号、任务对象参数、示范数、训练与测试划分、试验次数、随机种子及初始化分布。
+% TODO：核实各消融是否同时改变观测、动作标签或控制器；只有保持一致的部分才能视为受控条件。
+% TODO：报告训练配置、硬件算力、推理延迟、控制频率及全部模态的输入细节。
+% TODO(T-Mech)：新增实验完成后，应补充置信区间和跨训练种子的统计，不能仅复用当前百分比。
+
+% B. 外部力感知验证
+\subsection{External-Force Sensing Verification}
+
+% 为评估重力补偿，末端被置于覆盖工作空间的十个静态朝向，每个朝向记录一秒数据。
+To evaluate gravity compensation, the end effector is placed at ten static orientations spanning the workspace, with measurements recorded for one second at each orientation.
+% 比较补偿前后的三维力读数，以检查姿态相关偏置。
+Three-dimensional force readings before and after compensation are compared to examine pose-dependent bias.
+% 未补偿的力分量在不同姿态间变化可达 6.7 N，补偿后的轨迹显示这一变化明显减小。
+Uncompensated force components vary by up to $6.7\,\mathrm{N}$ across poses, while the compensated traces show a marked reduction in this variation.
+% 该实验支持补偿对静态重力偏置的抑制效果。
+This experiment supports the effectiveness of compensation in suppressing static gravity-related bias.
+% TODO：补充补偿后的逐轴均值、标准差或 RMSE，并增加已知外载下的精度实验。
+% TODO(T-Mech)：增加动态运动、不同负载、空载夹爪开合和长时间漂移实验。
+
+% C. 人机交互对齐的示范对比
+\subsection{Human-Aligned Demonstration Comparison}
+
+% 示范对比采用拿起白板擦、擦除红色标记并放回的任务。
+The demonstration comparison uses a task requiring the operator to pick up an eraser, remove red markings from a whiteboard, and place the eraser back.
+% 比较直接人类操作、无双边力反馈遥操作和 OmniUMI 三种条件。
+Three conditions are compared: direct human manipulation, teleoperation without bilateral force feedback, and OmniUMI.
+% 当前记录为每种条件提供一条代表性轨迹。
+The current record provides one representative trajectory for each condition.
+% 拿取与持握阶段检查内部夹持力，擦拭阶段检查法向接触力 F_z。
+Internal grasping force is examined during grasping and holding, and normal contact force $F_z$ is examined during wiping.
+
+% 触觉交互通过标记位移向量的二范数表征。
+Tactile interaction is characterized by the Euclidean norm of the marker-displacement vector:
+\begin{equation}
+    d_t^{\mathrm{tac}}=\left\|\Delta\mathbf{m}_t\right\|_2,
+    \qquad
+    \Delta\mathbf{m}_t\in\mathbb{R}^{126}.
+    \label{eq:tactile_deformation_proxy}
+\end{equation}
+% 这一标量用于汇总所选标记的形变幅值，作为接触变化的代理指标。
+This scalar summarizes the deformation magnitude of the selected markers and serves as a proxy for contact changes.
+% 在报告的例子中，OmniUMI 的夹持力、法向接触力和触觉形变曲线在幅值与变化趋势上更接近直接人类操作。
+In the reported examples, the grasp-force, normal-force, and tactile-deformation profiles obtained with OmniUMI more closely follow direct human manipulation in magnitude and temporal evolution.
+% 无双边反馈遥操作的例子显示较大的波动和偏差。
+The teleoperation examples without bilateral feedback exhibit larger fluctuations and deviations.
+% TODO：明确直接人类操作的测量装置、三种条件的传感器一致性、标记参考状态及时间对齐方法。
+% TODO(T-Mech)：将单条代表性曲线扩展到多操作者、多试次比较；在相同硬件上开关反馈以隔离反馈作用。
+
+% D. 下游接触操作
+\subsection{Downstream Contact-Rich Manipulation}
+
+% 1. 力敏感抓取搬运
+\subsubsection{Force-Sensitive Pick-and-Place}
+
+% 抓取任务要求机器人拿起一瓶未开封的满瓶矿泉水，将其运输并放入托盘。
+The grasping task requires the robot to lift a full, unopened bottle of mineral water, transport it, and place it into a tray.
+% 该任务检验夹持载荷是否足以在抬升和搬运过程中防止滑落。
+This task tests whether grasp loading is sufficient to prevent slippage during lifting and transport.
+% 表中报告包含或不包含夹持力输入的策略结果。
+Table~\ref{tab:grasp_results} reports the policy results with and without grasp-force input.
+% 在当前报告的评估中，加入该输入后成功率由零提高至百分之百，滑落率由百分之百降低至零。
+In the reported evaluation, including this input increases success from $0\%$ to $100\%$ and reduces slippage from $100\%$ to $0\%$.
+% 这一结果支持夹持力观测对该搬运设置的作用，但不能单独证明对未知质量或易损物体的泛化。
+This result supports the role of grasp-force observations in this transport setting; generalization to unseen loads or fragile objects requires additional evaluation.
+
+\begin{table}[t]
+    \centering
+    % 夹持力输入对力敏感抓取搬运的影响。数值来自 v3 表 1。
+    \caption{Effect of grasp-force input on force-sensitive pick-and-place.}
+    \label{tab:grasp_results}
+    \small
+    \begin{tabular}{lcc}
+        \toprule
+        Input variant & Success (\%) & Slippage (\%)\\
+        \midrule
+        Without grasp force & 0.0 & 100.0\\
+        With grasp force & 100.0 & 0.0\\
+        \bottomrule
+    \end{tabular}
+\end{table}
+% TODO：补充瓶子质量、示范数、试验次数、滑落判据及初始位姿分布。
+
+% 2. 白板擦拭
+\subsubsection{Interactive Surface Erasing}
+
+% 擦拭任务要求机器人与白板保持接触并移除红色标记。
+The erasing task requires the robot to maintain contact with the whiteboard while removing red markings.
+% 成功率根据残留标记面积的百分之五和百分之五十两个判据报告。
+Success is reported under two residual-marking criteria, $5\%$ and $50\%$.
+% 在报告的设置中，成功擦拭过程维持的法向接触力高于 7 N。
+In the reported setup, successful wiping maintains normal contact force above $7\,\mathrm{N}$.
+% 表中结果表明，包含外部力输入的策略在两个判据下均达到百分之百成功率。
+Table~\ref{tab:erasing_results} shows that the policy with wrench input reaches $100\%$ success under both criteria.
+% 不包含该输入的策略在严格判据下未成功，并在宽松判据下达到百分之六十成功率。
+The policy without this input achieves no success under the stricter criterion and $60\%$ success under the looser criterion.
+
+\begin{table}[t]
+    \centering
+    % 外部力输入对白板擦拭的影响。数值来自 v3 表 2。
+    \caption{Erasing success under two residual-marking criteria.}
+    \label{tab:erasing_results}
+    \small
+    \begin{tabular}{lcc}
+        \toprule
+        Input variant & $5\%$ residual & $50\%$ residual\\
+        \midrule
+        Without wrench & 0.0\% & 60.0\%\\
+        With wrench & 100.0\% & 100.0\%\\
+        \bottomrule
+    \end{tabular}
+\end{table}
+% TODO：明确残留面积的分母、图像分割方法、感兴趣区域、擦拭时间预算及试验次数。
+% TODO(T-Mech)：增加板面高度与倾角变化，并报告力误差、峰值和失去接触次数。
+
+% 3. 触觉辅助选择性释放
+\subsubsection{Tactile-Informed Selective Release}
+
+% 选择性释放任务从低夹持载荷下握持的两个嵌套透明杯开始，目标是释放内杯并保留外杯。
+Selective release starts with two nested transparent cups held under low grasp loading; the goal is to release the inner cup while retaining the outer cup.
+% 这一任务检验局部接触信息是否有助于选择释放时机。
+This task tests whether local contact information helps determine release timing.
+% 表中报告，加入触觉输入后选择性释放成功率由百分之二十提高至百分之百，同时两个杯子均被保留的失败率降为零。
+Table~\ref{tab:release_results} reports an increase in selective-release success from $20\%$ to $100\%$ with tactile input, while the failure rate of retaining both cups falls to zero.
+
+\begin{table}[t]
+    \centering
+    % 触觉输入对嵌套杯选择性释放的影响。数值来自 v3 表 3。
+    \caption{Effect of tactile input on nested-cup selective release.}
+    \label{tab:release_results}
+    \small
+    \begin{tabular}{lcc}
+        \toprule
+        Input variant & Success (\%) & Both retained (\%)\\
+        \midrule
+        Without tactile input & 20.0 & 80.0\\
+        With tactile input & 100.0 & 0.0\\
+        \bottomrule
+    \end{tabular}
+\end{table}
+% TODO：补充低夹持载荷的定义、杯子尺寸与材料、释放判据、试验次数，以及两杯同时释放的统计。
+
+% E. 模态作用与人机交互对齐的解释
+\subsection{Interpretation of Modality Contributions}
+
+% 三个任务分别提供夹持载荷、环境接触和局部接触辨识方面的证据。
+The three tasks provide evidence concerning grasp loading, environmental contact, and local contact discrimination, respectively.
+% 当前消融支持相应交互输入在所测试设置中的作用。
+The current ablations support the contribution of the corresponding interaction inputs in the tested settings.
+% 这些观测消融与代表性示范对比相互补充，分别检查记录信号的任务效用和示范特征。
+These observation ablations complement the representative demonstration comparisons by examining the task-level utility and demonstration characteristics of the recorded signals.
+% TODO(T-Mech)：增加视觉基线、触觉、夹持力、腕部力和完整多模态组合的受控比较。
+% TODO(T-Mech)：在一至两个任务上比较反馈开/关采集的数据与普通融合/对齐方法的 2x2 组合，统一测试侧输入和训练预算。
+% TODO(T-Mech)：若新增跨模态对齐，加入夹持强度变化而外载基本不变、以及外载变化而夹持强度基本不变的受控实验。
+
+% F. 讨论与局限
+\subsection{Discussion and Limitations}
+
+% 现有结果表明，系统能够记录有任务意义的交互信号，并使策略利用力和触觉观测完成所评估的接触操作。
+The current results show that the system records task-relevant interaction signals and enables policies to exploit force and tactile observations in the evaluated contact tasks.
+% 仍需区分静态补偿验证、动态测量精度和真实控制性能。
+Static compensation, dynamic measurement accuracy, and realized control performance remain distinct aspects of validation.
+% 当前静态姿态实验尚不能完整表征动态外力误差，电机侧夹持力估计也需要更全面的独立标定。
+The current static-pose experiment does not fully characterize dynamic wrench error, and motor-side grasp-force estimation requires more extensive independent calibration.
+% 示范对比需要扩展到多个操作者与重复试验，任务结果也需要补充试验规模、统计不确定性和跨条件泛化。
+Demonstration comparisons need to be extended across operators and repeated trials, and task results require trial counts, statistical uncertainty, and generalization across conditions.
+% 人机交互对齐对下游学习的独立作用仍需在相同硬件、输入和训练预算下进行受控验证。
+The independent contribution of human alignment to downstream learning requires controlled evaluation with matched hardware, inputs, and training budgets.
+% 此外，局部雅可比增益映射不能替代对变刚度、时延和双边反馈整体系统的稳定性或被动性分析。
+The local Jacobian gain mapping also does not replace stability or passivity analysis of the complete system with variable stiffness, delays, and bilateral feedback.
+% 这些问题界定了当前证据的范围，并为系统验证的进一步深化提供方向。
+These issues define the scope of the current evidence and guide further system validation.
+
+% VII. 结论
+\section{Conclusion}
+\label{sec:conclusion}
+
+% 本文提出 OmniUMI，一套连接人类接触调节、多模态示范采集和机器人执行的手持操作接口。
+This paper presents OmniUMI, a handheld manipulation interface connecting human contact regulation, multimodal demonstration acquisition, and robot execution.
+% 共享电动夹爪、多模态感知和双边夹持反馈共同支持接触过程中的感知、调节与记录。
+A shared motorized gripper, multimodal sensing, and bilateral grasp feedback jointly support perception, regulation, and recording during contact.
+% 多模态扩散策略将所采集的观测映射为运动与交互指令，并通过虚拟目标和关节阻抗控制实现执行。
+A multimodal diffusion policy maps the acquired observations to motion and interaction commands, which are executed through virtual targets and joint impedance control.
+% 感知实验、代表性示范对比以及抓取、擦拭和选择性释放任务，为这一系统设计提供了验证。
+Sensing experiments, representative demonstration comparisons, and grasping, erasing, and selective-release tasks provide validation of this system design.
+% 后续研究将深化受控的 human-align 评估、触觉与力的物理一致表示学习，以及更广泛接触条件下的测量和执行验证。
+Further work will investigate controlled human-alignment evaluation, physically consistent tactile--force representation learning, and measurement and execution across a broader range of contact conditions.

@@ -933,6 +933,16 @@ _CONFIGS = [
         num_train_steps=40_000,
         num_workers=4,
     ),
+    _make_umi_train_config(
+        name="infra_test_pi05_umi_pick_place_cup_fov167",
+        repo_id="/share/project/lxy/Data/omniumi_infra_test/pnp_red_cup_fov167_1103_openpi",
+        asset_id="lxy_umi_red_cup_yellow_plate_fov167_1103",
+        default_prompt="Pick up the red cup and place it on the yellow plate.",
+        num_train_steps=20_000,
+        num_workers=2,
+    ),
+
+    
     # Paired historical images and proprioception; existing experiments stay visual-only.
     _make_umi_train_config(
         name="pi05_umi_adjust_tube_20261028_printed_noprocess_proprio",
@@ -943,6 +953,16 @@ _CONFIGS = [
         num_train_steps=40_000,
         num_workers=16,
     ),
+    _make_umi_train_config(
+        name="pi05_umi_insert_usb_20261026_proprio",
+        repo_id="/share/project/lxy/Data/openpi_with_tactile/insert_usb_20261026_133824_openpi",
+        asset_id="umi_insert_usb_20261026_proprio",
+        proprioception=True,
+        default_prompt="Align the USB plug with the USB port and fully insert it into the port.",
+        num_train_steps=40_000,
+        num_workers=8,
+    ),
+    
 
 
     _make_umi_train_config(
