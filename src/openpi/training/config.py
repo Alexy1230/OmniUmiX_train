@@ -941,6 +941,23 @@ _CONFIGS = [
         num_train_steps=20_000,
         num_workers=2,
     ),
+    _make_umi_train_config(
+        name="pi05_umi_adjust_tube_20261106_fov167",
+        repo_id="/share/project/lxy/Data/openpi_with_tactile/adjust_tube_fov167_20261106_merged_cleaned_openpi/adjust_tube_fov167_20261106_merged_cleaned_openpi",
+        asset_id="lxy_umi_adjust_tube_fov167_1106",
+        default_prompt="Pick up the clear plastic tube, align it with an empty hole in the tube rack, and insert it.",
+        num_train_steps=40_000,
+        num_workers=16,
+    ),
+    _make_umi_train_config(
+        name="pi05_umi_adjust_tube_20261109_fov167_short",
+        repo_id="/share/project/lxy/Data/openpi_with_tactile/adjust_tube_fov167_20261109_163334_cleaned_openpi",
+        asset_id="lxy_umi_adjust_tube_fov167_1109_short",
+        default_prompt="Pick up the green tube, align it with an empty hole in the tube rack, and insert it.",
+        num_train_steps=40_000,
+        num_workers=16,
+    ),
+
 
     
     # Paired historical images and proprioception; existing experiments stay visual-only.
@@ -962,7 +979,25 @@ _CONFIGS = [
         num_train_steps=40_000,
         num_workers=8,
     ),
-    
+    _make_umi_train_config(
+        name="pi05_umi_adjust_tube_20261106_fov167_proprio",
+        repo_id="/share/project/lxy/Data/openpi_with_tactile/adjust_tube_fov167_20261106_merged_cleaned_openpi/adjust_tube_fov167_20261106_merged_cleaned_openpi",
+        asset_id="lxy_umi_adjust_tube_fov167_1106_proprio",
+        proprioception=True,
+        default_prompt="Pick up the clear plastic tube, align it with an empty hole in the tube rack, and insert it.",
+        num_train_steps=40_000,
+        num_workers=16,
+    ),
+    _make_umi_train_config(
+        name="pi05_umi_adjust_tube_20261109_fov167_short_proprio",
+        repo_id="/share/project/lxy/Data/openpi_with_tactile/adjust_tube_fov167_20261109_163334_cleaned_openpi",
+        asset_id="lxy_umi_adjust_tube_fov167_1109_short_proprio",
+        proprioception=True,
+        default_prompt="Pick up the green tube, align it with an empty hole in the tube rack, and insert it.",
+        num_train_steps=40_000,
+        num_workers=16,
+    ),
+
 
 
     _make_umi_train_config(
